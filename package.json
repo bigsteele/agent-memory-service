@@ -1,0 +1,26 @@
+{
+  "name": "agent-memory-service",
+  "version": "1.0.0",
+  "description": "Always-on AI memory service — persistent structured memory for AI agents and coding assistants with LLM extraction and background consolidation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "setup": "node scripts/setup.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^4.21.0",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bigsteele/agent-memory-service.git"
+  },
+  "keywords": ["ai", "memory", "agent", "llm", "claude", "gemini", "sqlite", "rag"],
+  "author": "Together Inc",
+  "license": "MIT"
+}
