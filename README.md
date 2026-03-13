@@ -220,7 +220,9 @@ Any agent with HTTP access can use the API. Store memories from agent conversati
 | `MEMORY_API_KEY` | — | API key for auth (optional, set `x-api-key` header) |
 | `CONSOLIDATION_INTERVAL_MS` | `21600000` | Background consolidation interval (default: 6h) |
 | `CONSOLIDATION_BATCH_SIZE` | `50` | Max memories per consolidation run |
-| `CONSOLIDATION_THRESHOLD` | `10` | Min unconsolidated memories to trigger consolidation |
+| `CONSOLIDATION_THRESHOLD` | `20` | Min unconsolidated memories before consolidation triggers |
+| `MAX_CLUSTER_SIZE` | `8` | Max memories merged into a single summary |
+| `IMPORTANCE_PROTECT` | `0.85` | Memories at or above this importance are never consolidated |
 
 ## How It Works
 
@@ -248,12 +250,18 @@ Any agent with HTTP access can use the API. Store memories from agent conversati
 ### Consolidation
 
 Every 6 hours (configurable), the service:
-1. Finds unconsolidated memories grouped by shared entities/topics
-2. Sends each cluster to Gemini Flash for summarization
-3. Stores the summary as a new `summary` memory
-4. Marks originals as superseded (soft-deleted, still queryable by ID)
+1. Finds unconsolidated memories (skips any with importance >= `IMPORTANCE_PROTECT`)
+2. Clusters by shared entities or 2+ shared topics (max `MAX_CLUSTER_SIZE` per cluster)
+3. Sends each cluster to Gemini Flash for summarization
+4. Stores the summary as a new `summary` memory
+5. Marks originals as superseded (soft-deleted, still queryable by ID)
 
-This keeps the active memory store lean while preserving detail.
+**Safety guardrails:**
+- High-importance memories (>= 0.85) are **never** consolidated — they stay as-is forever
+- Clusters are capped at 8 memories to prevent mega-merges that lose detail
+- No transitive expansion — only the seed memory's tags determine the cluster scope
+- Requires 20+ unconsolidated memories before running (prevents premature consolidation)
+- First run waits 1 hour after deploy (prevents consolidating freshly-seeded data)
 
 ### Multi-Project
 
