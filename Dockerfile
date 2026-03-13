@@ -6,7 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci --production
+RUN if [ -f package-lock.json ]; then npm ci --production; else npm install --production; fi
 
 COPY . .
 
