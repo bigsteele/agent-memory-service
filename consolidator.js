@@ -9,7 +9,9 @@ const extractor = require('./extractor');
 
 const CONSOLIDATION_INTERVAL = parseInt(process.env.CONSOLIDATION_INTERVAL_MS) || 6 * 60 * 60 * 1000; // 6 hours
 const CONSOLIDATION_BATCH_SIZE = parseInt(process.env.CONSOLIDATION_BATCH_SIZE) || 50;
-const CONSOLIDATION_THRESHOLD = parseInt(process.env.CONSOLIDATION_THRESHOLD) || 10; // Min unconsolidated to trigger
+const CONSOLIDATION_THRESHOLD = parseInt(process.env.CONSOLIDATION_THRESHOLD) || 20; // Min unconsolidated to trigger
+const MAX_CLUSTER_SIZE = parseInt(process.env.MAX_CLUSTER_SIZE) || 8; // Prevent mega-clusters
+const IMPORTANCE_PROTECT = parseFloat(process.env.IMPORTANCE_PROTECT) || 0.85; // Never consolidate above this
 
 let running = false;
 
@@ -17,13 +19,21 @@ let running = false;
  * Run consolidation for a single project.
  */
 async function consolidateProject(project) {
-  const unconsolidated = memoryDb.getUnconsolidated(project, CONSOLIDATION_BATCH_SIZE);
+  const allUnconsolidated = memoryDb.getUnconsolidated(project, CONSOLIDATION_BATCH_SIZE);
 
-  if (unconsolidated.length < CONSOLIDATION_THRESHOLD) {
-    return { project, status: 'skip', reason: `Only ${unconsolidated.length} unconsolidated (threshold: ${CONSOLIDATION_THRESHOLD})` };
+  if (allUnconsolidated.length < CONSOLIDATION_THRESHOLD) {
+    return { project, status: 'skip', reason: `Only ${allUnconsolidated.length} unconsolidated (threshold: ${CONSOLIDATION_THRESHOLD})` };
   }
 
-  console.log(`[consolidator] ${project}: Processing ${unconsolidated.length} unconsolidated memories`);
+  // Protect high-importance memories from consolidation
+  const unconsolidated = allUnconsolidated.filter(m => (m.importance || 0) < IMPORTANCE_PROTECT);
+  const protected_count = allUnconsolidated.length - unconsolidated.length;
+
+  if (unconsolidated.length < 2) {
+    return { project, status: 'skip', reason: `${protected_count} memories protected (importance >= ${IMPORTANCE_PROTECT}), only ${unconsolidated.length} eligible` };
+  }
+
+  console.log(`[consolidator] ${project}: Processing ${unconsolidated.length} memories (${protected_count} protected by importance)`);
 
   // Cluster by entity/topic overlap
   const clusters = clusterMemories(unconsolidated);
@@ -90,25 +100,26 @@ function clusterMemories(memories) {
     const cluster = [m];
     assigned.add(m.id);
 
+    // Use ONLY the seed memory's entities/topics — no transitive expansion
     const mEntities = new Set(Array.isArray(m.entities) ? m.entities : []);
     const mTopics = new Set(Array.isArray(m.topics) ? m.topics : []);
 
     for (const other of memories) {
       if (assigned.has(other.id)) continue;
+      if (cluster.length >= MAX_CLUSTER_SIZE) break; // Cap cluster size
 
       const oEntities = new Set(Array.isArray(other.entities) ? other.entities : []);
       const oTopics = new Set(Array.isArray(other.topics) ? other.topics : []);
 
-      // Check for overlap
+      // Require entity overlap (topics alone are too broad)
       const sharedEntities = [...mEntities].filter(e => oEntities.has(e));
-      const sharedTopics = [...mTopics].filter(t => oTopics.has(t));
 
-      if (sharedEntities.length > 0 || sharedTopics.length > 0) {
+      // Only cluster if they share at least one entity, OR share 2+ topics
+      const sharedTopics = [...mTopics].filter(t => oTopics.has(t));
+      if (sharedEntities.length > 0 || sharedTopics.length >= 2) {
         cluster.push(other);
         assigned.add(other.id);
-        // Expand cluster scope
-        oEntities.forEach(e => mEntities.add(e));
-        oTopics.forEach(t => mTopics.add(t));
+        // DO NOT expand scope — prevents chain reaction clustering
       }
     }
 
@@ -154,11 +165,11 @@ async function consolidateAll() {
 function start() {
   console.log(`[consolidator] Starting background loop (interval: ${CONSOLIDATION_INTERVAL / 1000}s, threshold: ${CONSOLIDATION_THRESHOLD})`);
 
-  // Run first consolidation after 5 minutes (let the service warm up)
+  // First consolidation after 1 hour (give time for memories to accumulate, don't consolidate on fresh deploy)
   setTimeout(async () => {
     const results = await consolidateAll();
     console.log('[consolidator] Initial run complete:', results.map(r => `${r.project}: ${r.status}`).join(', ') || 'no projects');
-  }, 5 * 60 * 1000);
+  }, 60 * 60 * 1000);
 
   // Then run on interval
   setInterval(async () => {
