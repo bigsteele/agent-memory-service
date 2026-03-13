@@ -19,7 +19,7 @@ Your AI assistant forgets everything between conversations. This fixes that.
 ### Local (2 minutes)
 
 ```bash
-git clone https://github.com/YOUR_ORG/agent-memory-service.git
+git clone https://github.com/bigsteele/agent-memory-service.git
 cd agent-memory-service
 npm install
 node server.js
