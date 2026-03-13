@@ -26,8 +26,16 @@ import urllib.parse
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 MEMORY_URL = os.environ.get("MEMORY_SERVICE_URL", "https://memory-service-production-737e.up.railway.app")
-MEMORY_PROJECT = os.environ.get("MEMORY_PROJECT", os.environ.get("AGENT_NAME", "unknown"))
-MEMORY_AGENT = os.environ.get("AGENT_NAME", "system")
+
+# Derive agent name from AGENT_NAME, MEMORY_PROJECT, or RAILWAY_SERVICE_NAME
+def _get_agent_name():
+    name = os.environ.get("AGENT_NAME") or os.environ.get("RAILWAY_SERVICE_NAME", "system")
+    # Strip emoji and whitespace from Railway service names like "Intel 🧠"
+    import re
+    return re.sub(r'[^\w-]', '', name.split()[0]).lower() if name else "system"
+
+MEMORY_AGENT = _get_agent_name()
+MEMORY_PROJECT = os.environ.get("MEMORY_PROJECT", f"together-{MEMORY_AGENT}")
 API_KEY = os.environ.get("MEMORY_API_KEY", "")
 
 # ─── HTTP helpers ────────────────────────────────────────────────────────────
