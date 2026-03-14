@@ -1,120 +1,122 @@
-## Project Memory System
+# Claude Code Setup
 
-This project uses a centralized memory service to persist knowledge across conversations. The memory service stores structured memories (facts, observations, decisions, gotchas) so that future conversations don't waste tokens rediscovering the same information.
+Two ways to connect: **MCP (recommended)** or **CLAUDE.md curl fallback**.
 
-### Connection
+---
 
-- **URL:** `https://memory-service-production.up.railway.app`
-- **Project ID:** Use the repo/directory name in lowercase with hyphens (e.g., `my-saas-app`)
-- **Auth:** Include `x-api-key: MEMORY_API_KEY_HERE` header if auth is enabled
+## Option 1: MCP Server (Recommended)
 
-### How Memory Works
+Add to your project's `.mcp.json`:
 
-The memory service stores structured memories with:
-- **content** — the actual knowledge (1-2 sentences, concise)
-- **memory_type** — `fact`, `observation`, `reflection`, `preference`, `episode`, or `summary`
-- **importance** — 0.0 to 1.0 score (most things are 0.4-0.6, only critical items get 0.8+)
-- **entities** — people, companies, services, tools mentioned
-- **topics** — category tags for grouping (e.g., `deployment`, `auth`, `database`)
-- **source** — where this came from (e.g., `claude-code`, `conversation`, `debug-session`)
-
-A background process consolidates related memories every 6 hours using a cheap LLM (Gemini Flash), merging duplicates and creating summaries.
-
-### When to Query Memory
-
-**At the start of every conversation**, fetch project context:
-```bash
-curl -s "https://memory-service-production.up.railway.app/api/context/PROJECT_ID"
-```
-This returns high-importance memories + consolidated summaries in a single call. Read this before doing any work.
-
-**Before working on unfamiliar code**, search for relevant knowledge:
-```bash
-curl -s "https://memory-service-production.up.railway.app/api/query?project=PROJECT_ID&q=SEARCH+TERMS&limit=5"
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": ["/path/to/agent-memory-service/mcp-server.js"],
+      "env": {
+        "MEMORY_SERVICE_URL": "https://your-memory-service.example.com",
+        "MEMORY_PROJECT": "your-project-name",
+        "MEMORY_API_KEY": ""
+      }
+    }
+  }
+}
 ```
 
-**Before debugging**, check if the issue has been seen before:
-```bash
-curl -s "https://memory-service-production.up.railway.app/api/query?project=PROJECT_ID&q=ERROR+KEYWORDS&limit=5"
+Then add one line to CLAUDE.md (optional):
+
+```markdown
+## Memory Service
+Available via the `memory` MCP server (configured in `.mcp.json`). Use `memory_context` to load project knowledge, `memory_query` to search, `memory_store` to persist discoveries.
 ```
 
-### When to Store Memories
+**That's it.** Claude Code gets 7 tools automatically:
+- `memory_context` — load project knowledge at start of work
+- `memory_query` — search before working on unfamiliar code
+- `memory_store` — save discoveries (facts, observations, preferences)
+- `memory_ingest` — send raw text for smart extraction via Gemini
+- `memory_recent` — see what was recently stored
+- `memory_stats` — memory store statistics
+- `memory_forget` — delete a specific memory
 
-**STORE after:**
-- Discovering a non-obvious pattern, gotcha, or workaround
-- Making an architectural decision (store the decision AND the reasoning)
-- Fixing a bug that took investigation (what caused it, what fixed it)
-- Learning how an external service actually behaves (API quirks, rate limits, auth flows)
-- Completing a significant feature or migration
-- Getting corrected by the user on how they want things done
+**Why MCP over curl?**
+- No CLAUDE.md bloat (curl instructions eat ~500 tokens per conversation)
+- GSD subagents automatically inherit MCP tools
+- Ralph Loops don't waste tokens on memory management
+- Tool schemas are self-documenting
 
-**Smart ingest** — send raw text and the service extracts structured memories automatically:
-```bash
-curl -s -X POST "https://memory-service-production.up.railway.app/api/ingest" \
+---
+
+## Option 2: CLAUDE.md Curl Fallback
+
+If you can't use MCP, add this block to your project's `CLAUDE.md`. Replace `YOUR_URL` and `PROJECT_ID`:
+
+```markdown
+## Project Memory
+
+Memory service at `YOUR_URL` — project: `PROJECT_ID`
+
+**Load context at start:** `curl -s "YOUR_URL/api/context/PROJECT_ID"`
+
+**Search:** `curl -s "YOUR_URL/api/query?project=PROJECT_ID&q=KEYWORDS"`
+
+**Store:**
+\`\`\`bash
+curl -s -X POST "YOUR_URL/api/store" \
   -H "Content-Type: application/json" \
-  -d '{"project":"PROJECT_ID","source":"claude-code","content":"Describe what you learned in plain English. The service will extract entities, topics, and importance automatically."}'
-```
+  -d '{"project":"PROJECT_ID","content":"WHAT YOU LEARNED","memory_type":"fact","importance":0.7,"source":"claude-code"}'
+\`\`\`
 
-**Direct store** — when you want to control the structure yourself:
-```bash
-curl -s -X POST "https://memory-service-production.up.railway.app/api/store" \
+**Smart ingest (auto-extract via Gemini):**
+\`\`\`bash
+curl -s -X POST "YOUR_URL/api/ingest" \
   -H "Content-Type: application/json" \
-  -d '{
-    "project": "PROJECT_ID",
-    "content": "The specific fact or observation",
-    "memory_type": "fact",
-    "importance": 0.7,
-    "entities": ["ServiceName", "PersonName"],
-    "topics": ["deployment", "auth"],
-    "source": "claude-code"
-  }'
+  -d '{"project":"PROJECT_ID","source":"claude-code","content":"Raw text describing what you learned"}'
+\`\`\`
 ```
 
-### DO NOT Store
+### When to Store
+- Non-obvious patterns, gotchas, workarounds
+- Architectural decisions and their reasoning
+- Bug fixes that required investigation
+- External service behavior (API quirks, rate limits)
+- User preferences and corrections
 
-- Code that's in the repo (that's what git is for)
+### When NOT to Store
+- Code already in the repo (that's what git is for)
 - Trivial operations (ran npm install, created a file)
-- Anything already documented in this CLAUDE.md
-- Temporary debugging state that won't matter tomorrow
-- File paths or line numbers (they change constantly)
+- Anything already in CLAUDE.md
+- Temporary debugging state
+- File paths or line numbers (they change)
 
 ### Memory Types
 
 | Type | Use When | Example |
 |------|----------|---------|
-| `fact` | Verified, concrete information | "Supabase project uses ES256 JWT signing, not HS256" |
-| `observation` | Pattern you noticed | "Deploys take ~4 min, CSS changes don't need full rebuild" |
-| `reflection` | Your interpretation or lesson | "Auth failures always spike after cert rotation — check certs first" |
-| `preference` | How the user/project wants things done | "Owner prefers shadcn/ui components, never installs new UI libraries" |
-| `episode` | Narrative of what happened | "Migration failed on FK constraint, rolled back, added ON DELETE CASCADE, reran successfully" |
+| `fact` | Verified info | "Supabase uses ES256 JWT signing" |
+| `observation` | Pattern noticed | "Deploys take ~4 min, CSS doesn't need full rebuild" |
+| `reflection` | Lesson learned | "Auth failures spike after cert rotation — check certs first" |
+| `preference` | How user wants things done | "Owner prefers shadcn/ui, never install new UI libs" |
+| `episode` | What happened | "Migration failed on FK, rolled back, added CASCADE, reran" |
 
 ### Importance Guide
 
-| Score | When | Example |
-|-------|------|---------|
-| 0.9-1.0 | Security, money, data loss risk | "Production DB credentials rotated on 2026-03-01" |
-| 0.7-0.8 | Key decisions, integration patterns | "We chose Stripe over Paddle because of multi-currency support" |
-| 0.5-0.6 | Useful context, normal findings | "The CI pipeline runs ESLint before tests" |
-| 0.3-0.4 | Minor details | "Logo SVG is in public/assets, not src/assets" |
-| 0.1-0.2 | Trivial, might help someday | "The original repo was forked from a template" |
+| Score | When |
+|-------|------|
+| 0.9-1.0 | Security, money, data loss risk |
+| 0.7-0.8 | Key decisions, integration patterns |
+| 0.5-0.6 | Useful context, normal findings |
+| 0.3-0.4 | Minor details |
 
-### Other Endpoints
+---
+
+## Using the Connect Script
+
+The fastest way — auto-detects project name, tests connection, sets up MCP:
 
 ```bash
-# Get memory stats
-curl -s "https://memory-service-production.up.railway.app/api/stats/PROJECT_ID"
-
-# Get recent memories
-curl -s "https://memory-service-production.up.railway.app/api/recent/PROJECT_ID?limit=20"
-
-# Forget a memory
-curl -s -X DELETE "https://memory-service-production.up.railway.app/api/forget/MEMORY_ID"
-
-# Manually trigger consolidation
-curl -s -X POST "https://memory-service-production.up.railway.app/api/consolidate" \
-  -H "Content-Type: application/json" \
-  -d '{"project":"PROJECT_ID"}'
-
-# List all projects
-curl -s "https://memory-service-production.up.railway.app/api/projects"
+bash /path/to/agent-memory-service/scripts/connect-project.sh https://your-memory-service.example.com
 ```
+
+Add `--with-claude-md` flag to also add curl instructions to CLAUDE.md.

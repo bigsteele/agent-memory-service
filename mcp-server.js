@@ -12,7 +12,7 @@
  *         "command": "node",
  *         "args": ["/path/to/agent-memory-service/mcp-server.js"],
  *         "env": {
- *           "MEMORY_SERVICE_URL": "https://memory-service-production-737e.up.railway.app",
+ *           "MEMORY_SERVICE_URL": "https://your-memory-service.example.com",
  *           "MEMORY_PROJECT": "my-project",
  *           "MEMORY_API_KEY": ""
  *         }
