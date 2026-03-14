@@ -25,7 +25,7 @@ import urllib.parse
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
-MEMORY_URL = os.environ.get("MEMORY_SERVICE_URL", "https://memory-service-production-737e.up.railway.app")
+MEMORY_URL = os.environ.get("MEMORY_SERVICE_URL", "http://localhost:3005")
 
 # Derive agent name from AGENT_NAME, MEMORY_PROJECT, or RAILWAY_SERVICE_NAME
 def _get_agent_name():
@@ -35,7 +35,7 @@ def _get_agent_name():
     return re.sub(r'[^\w-]', '', name.split()[0]).lower() if name else "system"
 
 MEMORY_AGENT = _get_agent_name()
-MEMORY_PROJECT = os.environ.get("MEMORY_PROJECT", f"together-{MEMORY_AGENT}")
+MEMORY_PROJECT = os.environ.get("MEMORY_PROJECT", f"agent-{MEMORY_AGENT}")
 API_KEY = os.environ.get("MEMORY_API_KEY", "")
 
 # ─── HTTP helpers ────────────────────────────────────────────────────────────

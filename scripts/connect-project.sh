@@ -37,9 +37,9 @@ if [ -z "$MEMORY_URL" ]; then
     echo "Connects your project to the memory service via MCP (recommended) or CLAUDE.md (fallback)."
     echo ""
     echo "Examples:"
-    echo "  bash connect-project.sh https://memory-service-production.up.railway.app"
-    echo "  bash connect-project.sh https://memory-service-production.up.railway.app my-api-key"
-    echo "  bash connect-project.sh https://memory-service-production.up.railway.app --with-claude-md"
+    echo "  bash connect-project.sh https://your-memory-service.example.com"
+    echo "  bash connect-project.sh https://your-memory-service.example.com my-api-key"
+    echo "  bash connect-project.sh https://your-memory-service.example.com --with-claude-md"
     exit 1
 fi
 

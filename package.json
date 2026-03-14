@@ -21,6 +21,6 @@
     "url": "https://github.com/bigsteele/agent-memory-service.git"
   },
   "keywords": ["ai", "memory", "agent", "llm", "claude", "gemini", "sqlite", "rag"],
-  "author": "Together Inc",
+  "author": "bigsteele",
   "license": "MIT"
 }
