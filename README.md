@@ -177,37 +177,59 @@ curl http://localhost:3005/health
 
 ## Connecting Your AI Tools
 
-### Claude Code
+### Claude Code (MCP — Recommended)
 
-Add to your project's `CLAUDE.md`:
+Add to your project's `.mcp.json`:
 
-```markdown
-## Project Memory
-
-This project uses a memory service at http://YOUR_URL for persistent knowledge.
-
-At the start of each conversation, fetch context:
-\`\`\`bash
-curl -s "http://YOUR_URL/api/context/PROJECT_NAME"
-\`\`\`
-
-After discovering something worth remembering:
-\`\`\`bash
-curl -s -X POST "http://YOUR_URL/api/ingest" \
-  -H "Content-Type: application/json" \
-  -d '{"project":"PROJECT_NAME","source":"claude-code","content":"What you learned"}'
-\`\`\`
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "node",
+      "args": ["/path/to/agent-memory-service/mcp-server.js"],
+      "env": {
+        "MEMORY_SERVICE_URL": "https://your-memory-service.com",
+        "MEMORY_PROJECT": "your-project-name",
+        "MEMORY_API_KEY": ""
+      }
+    }
+  }
+}
 ```
 
-See [docs/CLAUDE-CODE-SETUP.md](docs/CLAUDE-CODE-SETUP.md) for a complete, copy-paste-ready CLAUDE.md block.
+This gives Claude Code 7 MCP tools (`memory_context`, `memory_query`, `memory_store`, `memory_ingest`, `memory_recent`, `memory_stats`, `memory_forget`) with zero CLAUDE.md bloat. Tool descriptions are self-documenting.
+
+**Why MCP instead of curl instructions?**
+- **Saves tokens** — no curl commands or response parsing in context
+- **Works with subagents** — GSD subagents automatically inherit MCP tools
+- **Works with loops** — Ralph Loops and other iteration patterns don't waste tokens on memory management
+- **Self-documenting** — tool schemas describe usage; no CLAUDE.md instructions needed
+- **Cleaner** — native tool calls instead of Bash(curl) parsing
+
+Or use the connect script:
+
+```bash
+bash /path/to/agent-memory-service/scripts/connect-project.sh https://your-memory-service.com
+```
+
+Then add one line to CLAUDE.md (optional):
+
+```markdown
+## Memory Service
+Available via the `memory` MCP server (configured in `.mcp.json`). Use `memory_context` to load project knowledge, `memory_query` to search, `memory_store` to persist discoveries.
+```
+
+### Claude Code (CLAUDE.md Fallback)
+
+If you can't use MCP, see [docs/CLAUDE-CODE-SETUP.md](docs/CLAUDE-CODE-SETUP.md) for curl-based CLAUDE.md instructions.
 
 ### Cursor / Windsurf / Other AI Editors
 
-Add the same instructions to `.cursorrules`, `.windsurfrules`, or whatever config file your editor reads for AI context.
+Add curl instructions to `.cursorrules`, `.windsurfrules`, or your editor's AI config file. See [docs/CLAUDE-CODE-SETUP.md](docs/CLAUDE-CODE-SETUP.md) — the format works for any editor.
 
 ### Autonomous Agents
 
-Any agent with HTTP access can use the API. Store memories from agent conversations, query before taking actions, let consolidation handle cleanup.
+Any agent with HTTP access can use the REST API directly. Store memories from agent conversations, query before taking actions, let consolidation handle cleanup.
 
 ## Environment Variables
 
