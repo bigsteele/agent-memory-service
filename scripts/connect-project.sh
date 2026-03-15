@@ -132,7 +132,7 @@ json.dump(cfg, open('.mcp.json', 'w'), indent=2)
 
     echo "OK"
     echo "  Added 'memory' MCP server to .mcp.json"
-    echo "  Tools: memory_context, memory_query, memory_store, memory_ingest, memory_recent, memory_stats, memory_forget"
+    echo "  Tools: memory_context, memory_query, memory_store, memory_ingest, memory_recent, memory_stats, memory_forget, memory_graph"
     echo ""
     echo "  Claude Code, GSD subagents, and Ralph Loops will automatically have access."
     echo "  No CLAUDE.md instructions needed — tool descriptions are self-documenting."

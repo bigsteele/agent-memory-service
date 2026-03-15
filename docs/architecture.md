@@ -1,4 +1,4 @@
-# Agent Memory Service — Architecture
+# Agent Memory Service — Architecture (v2.0)
 
 ## How It Works
 
@@ -8,8 +8,8 @@
 │                                                                     │
 │   Claude Code        Cursor          Agents         Dashboard       │
 │   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐        │
-│   │ Project │    │ Project │    │  Bot 1  │    │  Admin  │        │
-│   │   A     │    │   B     │    │  Bot 2  │    │  Panel  │        │
+│   │ MCP     │    │ Project │    │  Bot 1  │    │  Admin  │        │
+│   │ Server  │    │   B     │    │  Bot 2  │    │  Panel  │        │
 │   └────┬────┘    └────┬────┘    └────┬────┘    └────┬────┘        │
 │        │              │              │              │               │
 └────────┼──────────────┼──────────────┼──────────────┼───────────────┘
@@ -17,16 +17,16 @@
          ▼              ▼              ▼              ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
-│                   MEMORY SERVICE  (REST API)                        │
-│                   ═══════════════════════                           │
+│                   MEMORY SERVICE v2.0  (REST API)                   │
+│                   ═══════════════════════════════                   │
 │                                                                     │
 │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐          │
-│   │  INGEST  │  │  QUERY   │  │ CONTEXT  │  │  STORE   │          │
+│   │  INGEST  │  │  STORE   │  │ CONTEXT  │  │  GRAPH   │          │
 │   │          │  │          │  │          │  │          │          │
-│   │ Raw text │  │ Keyword  │  │ Returns  │  │ Direct   │          │
-│   │ in, LLM  │  │ search,  │  │ top mem- │  │ struct-  │          │
-│   │ extracts │  │ ranked   │  │ ories +  │  │ ured     │          │
-│   │ memories │  │ by score │  │ summaries│  │ insert   │          │
+│   │ Raw text │  │ Direct + │  │ Scoped   │  │ Entity   │          │
+│   │ → Gemini │  │ contra-  │  │ by topic │  │ relation │          │
+│   │ extracts │  │ diction  │  │ + entity │  │ ships    │          │
+│   │ + edges  │  │ detect   │  │ graph    │  │          │          │
 │   └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘          │
 │        │              │              │              │               │
 │        ▼              ▼              ▼              ▼               │
@@ -34,19 +34,27 @@
 │   │                                                     │          │
 │   │              SQLite  (memory.db)                    │          │
 │   │                                                     │          │
-│   │   memories ─── consolidations ─── projects          │          │
+│   │   memories ─── entity_edges ─── consolidations      │          │
+│   │      │              │                               │          │
+│   │   summary_level  subject─predicate─object           │          │
+│   │   valid_until    confidence                         │          │
 │   │                                                     │          │
 │   └──────────────────────┬──────────────────────────────┘          │
 │                          │                                          │
 │                          ▼                                          │
 │   ┌─────────────────────────────────────────────────────┐          │
-│   │         BACKGROUND CONSOLIDATOR  (every 6h)         │          │
+│   │    PROGRESSIVE CONSOLIDATION  (every 6h)            │          │
 │   │                                                     │          │
-│   │   1. Find unconsolidated memories                   │          │
-│   │   2. Cluster by shared entities/topics              │          │
-│   │   3. Gemini Flash summarizes each cluster           │          │
-│   │   4. Store summary, supersede originals             │          │
-│   │   5. Knowledge grows sharper over time              │          │
+│   │    Level 0 (raw)                                    │          │
+│   │      ↓  20+ memories trigger                       │          │
+│   │    Level 1 (cluster summaries)                      │          │
+│   │      ↓  6+ L1 summaries trigger                    │          │
+│   │    Level 2 (theme summaries)                        │          │
+│   │      ↓  4+ L2 themes trigger                       │          │
+│   │    Level 3 (architectural principles)               │          │
+│   │                                                     │          │
+│   │    Each level extracts entity edges                 │          │
+│   │    Superseded memories get valid_until              │          │
 │   └─────────────────────────────────────────────────────┘          │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -54,7 +62,7 @@
 
 ═══════════════════════════════════════════════════════════════════════
                      GEMINI FLASH  ($0.15/M tokens)
-                     Used for extraction & consolidation
+                     Extraction + Consolidation + Contradiction Detection
                      Falls back to heuristics if no key
 ═══════════════════════════════════════════════════════════════════════
 ```
@@ -75,9 +83,23 @@
                       │  • topics     │
                       │  • importance │
                       │  • type       │
+                      │  • edges      │
                       └──────┬───────┘
                              │
-                             ▼
+         ┌───────────────────┤
+         │                   │
+         ▼                   ▼
+  ┌──────────────┐   ┌──────────────────┐
+  │ CONTRADICTION│   │   ENTITY GRAPH   │
+  │   DETECTION  │   │                  │
+  │              │   │  subject─pred─obj│
+  │  ADD: store  │   │  chat-relay      │
+  │  UPDATE:     │   │    ─depends─on─▶ │
+  │   supersede  │   │  Supabase SDK    │
+  │  NOOP: skip  │   │                  │
+  └──────┬───────┘   └──────────────────┘
+         │
+         ▼
   ┌──────────────────────────────────────┐
   │         MEMORY STORE (SQLite)        │
   │                                      │
@@ -85,6 +107,7 @@
   │  │ #1 │ │ #2 │ │ #3 │ │ #4 │  ...  │
   │  │fact│ │obs │ │fact│ │pref│       │
   │  │0.8 │ │0.5 │ │0.7 │ │0.6 │       │
+  │  │L0  │ │L0  │ │L0  │ │L0  │       │
   │  └────┘ └────┘ └────┘ └────┘       │
   │                                      │
   └──────────────┬───────────────────────┘
@@ -92,31 +115,107 @@
                  │  Every 6 hours
                  ▼
   ┌──────────────────────────────────────┐
-  │        CONSOLIDATION                 │
+  │   PROGRESSIVE CONSOLIDATION          │
   │                                      │
-  │  Cluster: #1, #3 (shared entities)   │
+  │  L0→L1: Cluster #1,#3 (entities)    │
   │       ↓                              │
-  │  Gemini Flash summarizes             │
+  │  Gemini summarizes + extracts edges  │
   │       ↓                              │
-  │  New summary #5 created              │
-  │  #1, #3 marked superseded            │
+  │  New L1 summary #5 created           │
+  │  #1, #3 superseded (valid_until set) │
   │                                      │
-  │  Before: 4 memories, 800 tokens      │
-  │  After:  3 memories, 400 tokens      │
+  │  L1→L2: Cluster L1 summaries         │
+  │       ↓                              │
+  │  New L2 theme #10 created            │
   │                                      │
+  │  L2→L3: Cluster L2 themes            │
+  │       ↓                              │
+  │  New L3 principle #15 created        │
+  │                                      │
+  │  500 L0 → 50 L1 → 8 L2 → 2 L3      │
   └──────────────────────────────────────┘
                  │
                  ▼
   ┌──────────────────────────────────────┐
-  │           QUERY / CONTEXT            │
+  │        QUERY / CONTEXT               │
   │                                      │
   │  Only active memories returned       │
+  │  Expired (valid_until) excluded      │
   │  Ranked by importance + recency      │
-  │  One API call = full project context │
+  │  Scoped by topic when requested      │
+  │  Entity graph included               │
   │                                      │
-  │  Token cost: ~200-500 tokens         │
-  │  vs. rediscovering: 5,000-10,000     │
+  │  Full context: ~500 tokens           │
+  │  Scoped context: ~150 tokens         │
   └──────────────────────────────────────┘
+```
+
+## v2.0 Feature: Contradiction Detection
+
+```
+  ┌──────────────────┐
+  │  New Memory:     │
+  │  "Port is 3005"  │
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │  findSimilar()   │──── keyword overlap search
+  │  Found 2 matches │
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐      ┌──────────────────┐
+  │  Gemini Flash    │─────▶│  Result:          │
+  │  Compare new vs  │      │                  │
+  │  existing        │      │  ADD → store it  │
+  └──────────────────┘      │  UPDATE → store, │
+                            │    supersede old  │
+                            │  NOOP → skip it  │
+                            └──────────────────┘
+```
+
+## v2.0 Feature: Entity Graph
+
+```
+  ┌─────────────────────────────────────────┐
+  │           entity_edges TABLE             │
+  │                                          │
+  │  ┌────────────┐  uses   ┌──────────┐    │
+  │  │ chat-relay │────────▶│ Supabase │    │
+  │  └────────────┘         │   SDK    │    │
+  │        │                └────┬─────┘    │
+  │        │ requires-           │           │
+  │        │ version        validates       │
+  │        ▼                     ▼           │
+  │  ┌──────────┐         ┌──────────┐      │
+  │  │  v2.98   │         │ ES256 JWT│      │
+  │  └──────────┘         └──────────┘      │
+  │                                          │
+  │  GET /api/graph/project                  │
+  │  GET /api/graph/project/entity           │
+  │  Included in /api/context response       │
+  └─────────────────────────────────────────┘
+```
+
+## v2.0 Feature: Scoped Context
+
+```
+  Full context load:              Scoped context load:
+  GET /api/context/proj           GET /api/context/proj?topics=auth
+
+  ┌─────────────────────┐        ┌─────────────────────┐
+  │ ALL high-importance │        │ auth-tagged only    │
+  │ 30 memories         │        │ 3 memories          │
+  │ 10 summaries        │        │ 1 summary           │
+  │ 20 facts            │        │ 2 facts             │
+  │ Full entity graph   │        │ Filtered graph      │
+  │                     │        │                     │
+  │ ~500 tokens         │        │ ~150 tokens         │
+  └─────────────────────┘        └─────────────────────┘
+
+  Use scoped context in GSD subagents / focused work
+  Use full context at start of new conversations
 ```
 
 ## Multi-Project Isolation
@@ -130,15 +229,9 @@
 │  │               │  │               │           │
 │  │  45 memories  │  │  12 memories  │           │
 │  │  3 summaries  │  │  0 summaries  │           │
+│  │  15 edges     │  │  4 edges      │           │
 │  │               │  │               │           │
 │  │  Can't see B  │  │  Can't see A  │           │
-│  └───────────────┘  └───────────────┘           │
-│                                                  │
-│  ┌───────────────┐  ┌───────────────┐           │
-│  │  Project: C   │  │  Project: D   │           │
-│  │               │  │               │           │
-│  │  128 memories │  │  3 memories   │           │
-│  │  8 summaries  │  │  0 summaries  │           │
 │  └───────────────┘  └───────────────┘           │
 │                                                  │
 │  All in one SQLite file                          │
@@ -164,29 +257,30 @@
   ┌──────────────────────────────────────────┐
   │  2. CONNECT  (per project)              │
   │                                          │
-  │  cd /path/to/any-project                 │
-  │  bash connect-project.sh YOUR_URL        │
+  │  Option A: MCP (recommended)             │
+  │  → Add to .mcp.json                      │
+  │  → 8 tools auto-available                │
+  │  → Zero CLAUDE.md bloat                  │
   │                                          │
-  │  ✓ Tests connection                      │
-  │  ✓ Registers project                     │
-  │  ✓ Updates CLAUDE.md                     │
-  │  ✓ Updates .cursorrules (if exists)      │
-  │  ✓ Gitignores credentials               │
+  │  Option B: CLAUDE.md curl instructions   │
+  │  → Add curl examples to CLAUDE.md        │
+  │  → Works with any AI editor              │
   │                                          │
-  │  Claude Code now knows how to use memory │
+  │  Option C: connect-project.sh script     │
+  │  → Auto-detects and configures both      │
   └────────────────────┬─────────────────────┘
                        │
                        ▼
   ┌──────────────────────────────────────────┐
   │  3. USE  (automatic)                    │
   │                                          │
-  │  Claude reads CLAUDE.md instructions     │
+  │  AI uses MCP tools or curl commands      │
   │     ↓                                    │
-  │  Fetches context at conversation start   │
+  │  Fetches scoped context at start         │
   │     ↓                                    │
-  │  Searches before unfamiliar work         │
+  │  Searches + checks graph before work     │
   │     ↓                                    │
-  │  Stores discoveries when done            │
+  │  Stores discoveries (auto-deduplicates)  │
   │     ↓                                    │
   │  Next conversation starts with knowledge │
   └──────────────────────────────────────────┘
@@ -195,25 +289,62 @@
 ## Cost Comparison
 
 ```
-  WITHOUT MEMORY SERVICE               WITH MEMORY SERVICE
-  ════════════════════                  ═══════════════════
+  WITHOUT MEMORY SERVICE               WITH MEMORY SERVICE v2.0
+  ════════════════════                  ════════════════════════
 
   Every conversation:                  Every conversation:
 
   ┌──────────────────┐                 ┌──────────────────┐
-  │ Read CLAUDE.md   │ ~2K tokens      │ Fetch /context   │ ~500 tokens
-  │ Read MEMORY.md   │ ~2K tokens      │ (one API call)   │
+  │ Read CLAUDE.md   │ ~2K tokens      │ Fetch /context   │ ~200-500 tokens
+  │ Read MEMORY.md   │ ~2K tokens      │ (scoped by topic)│
   │ Read config files│ ~3K tokens      │                  │
   │ Re-read docs     │ ~3K tokens      │ Already knows:   │
   │                  │                 │ • Past decisions │
   │ Re-discover:     │                 │ • Known gotchas  │
-  │ • Same gotchas   │ ~2K tokens      │ • API quirks     │
+  │ • Same gotchas   │ ~2K tokens      │ • Entity graph   │
   │ • Same patterns  │                 │ • User prefs     │
-  │ • Same API quirks│                 └──────────────────┘
-  └──────────────────┘
-                                        Cost: ~$0.001/conversation
-  Cost: ~$0.03/conversation             Service: ~$5-10/month
-  × 50 conversations/day
-  = ~$1.50/day = ~$45/month             Total: ~$10/month
+  │ • Same API quirks│                 │ • No duplicates  │
+  └──────────────────┘                 └──────────────────┘
+
+  Cost: ~$0.03/conversation            Cost: ~$0.001/conversation
+  × 50 conversations/day               Service: ~$5-10/month
+  = ~$1.50/day = ~$45/month
+                                        Total: ~$10/month
                                         Savings: ~$35/month + better results
+```
+
+## SQLite Schema
+
+```sql
+-- Core memories with progressive summarization
+memories (
+  id, project, agent, content, memory_type, source,
+  summary, entities[], topics[], importance,
+  access_count, last_accessed_at,
+  consolidated, superseded_by,
+  summary_level,    -- 0=raw, 1=cluster, 2=theme, 3=principle
+  valid_until,      -- temporal invalidation
+  created_at, updated_at
+)
+
+-- Entity relationship graph
+entity_edges (
+  id, project,
+  subject, predicate, object,  -- "Supabase" "uses" "ES256"
+  memory_id,                   -- source memory
+  confidence,                  -- 0.0-1.0
+  created_at
+)
+
+-- Consolidation audit log
+consolidations (
+  id, project, source_ids[], summary, insight,
+  memories_processed, memories_created, created_at
+)
+
+-- Auto-registered projects
+projects (
+  name, display_name, description, config{},
+  created_at, last_activity_at
+)
 ```
