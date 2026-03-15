@@ -78,14 +78,25 @@ async function extract(content, source) {
     });
 
     const response = await httpPost(GEMINI_URL, body);
+
+    // Log raw response structure for diagnostics
+    if (response.error) {
+      console.error('[extractor] Gemini API error:', JSON.stringify(response.error));
+      return extractFallback(content, source);
+    }
+
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!text) {
-      console.warn('[extractor] Empty Gemini response, using fallback');
+      console.warn('[extractor] Empty Gemini response. Keys in response:', Object.keys(response));
+      if (response.candidates) {
+        console.warn('[extractor] Candidate structure:', JSON.stringify(response.candidates[0]).slice(0, 500));
+      }
       return extractFallback(content, source);
     }
 
     const parsed = JSON.parse(text);
+    console.log(`[extractor] Gemini extracted ${(parsed.memories || []).length} memories`);
     return parsed.memories || [];
   } catch (err) {
     console.error('[extractor] Gemini extraction failed:', err.message);
@@ -121,10 +132,21 @@ async function detectContradiction(newContent, existingMemories) {
     });
 
     const response = await httpPost(GEMINI_URL, body);
+
+    if (response.error) {
+      console.error('[extractor] Gemini contradiction API error:', JSON.stringify(response.error));
+      return { action: 'ADD', supersede_ids: [], reason: `Gemini error: ${response.error.message || JSON.stringify(response.error)}` };
+    }
+
     const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (!text) return { action: 'ADD', supersede_ids: [], reason: 'Empty response' };
+    if (!text) {
+      console.warn('[extractor] Empty contradiction response. Keys:', Object.keys(response));
+      return { action: 'ADD', supersede_ids: [], reason: 'Empty Gemini response' };
+    }
+
     const parsed = JSON.parse(text);
+    console.log(`[extractor] Contradiction result: ${parsed.action} (${parsed.reason || 'no reason'})`);
     return {
       action: parsed.action || 'ADD',
       supersede_ids: parsed.supersede_ids || [],

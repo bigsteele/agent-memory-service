@@ -37,12 +37,23 @@ app.get('/health', (req, res) => {
   const projects = memoryDb.listProjects();
   res.json({
     status: 'ok',
-    version: '2.0.0',
+    version: '2.0.1',
     features: ['entity-graph', 'temporal-invalidation', 'scoped-context', 'progressive-summarization', 'contradiction-detection'],
     projects: projects.length,
     gemini: !!process.env.GEMINI_API_KEY,
+    gemini_model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
     uptime: Math.floor(process.uptime()),
   });
+});
+
+// Diagnostic: test Gemini connectivity
+app.get('/api/test-gemini', async (req, res) => {
+  try {
+    const result = await extractor.extract('The server runs on port 3005 and uses SQLite for storage.', 'diagnostic');
+    res.json({ status: 'ok', result, fallback: result.length === 1 && result[0].summary && result[0].summary.length <= 100 && result[0].importance === 0.5 });
+  } catch (err) {
+    res.json({ status: 'error', error: err.message });
+  }
 });
 
 // ─── Ingest ──────────────────────────────────────────────────────────────────
