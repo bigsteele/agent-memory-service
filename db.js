@@ -90,8 +90,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
   CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
-  CREATE INDEX IF NOT EXISTS idx_memories_summary_level ON memories(project, summary_level)
-    WHERE superseded_by IS NULL;
   CREATE INDEX IF NOT EXISTS idx_consolidations_project ON consolidations(project);
   CREATE INDEX IF NOT EXISTS idx_entity_edges_project ON entity_edges(project);
   CREATE INDEX IF NOT EXISTS idx_entity_edges_subject ON entity_edges(subject);
@@ -100,9 +98,15 @@ db.exec(`
 `);
 
 // ─── Schema migrations (add columns if upgrading from older version) ────────
+// Must run BEFORE indexes that reference new columns
 
 try { db.exec('ALTER TABLE memories ADD COLUMN summary_level INTEGER DEFAULT 0'); } catch {}
 try { db.exec('ALTER TABLE memories ADD COLUMN valid_until TEXT'); } catch {}
+
+// Index on new columns (safe now that migrations have run)
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_memories_summary_level ON memories(project, summary_level) WHERE superseded_by IS NULL`);
+} catch {}
 
 // ─── Prepared Statements ────────────────────────────────────────────────────
 
