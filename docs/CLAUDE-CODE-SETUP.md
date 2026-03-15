@@ -28,17 +28,18 @@ Then add one line to CLAUDE.md (optional):
 
 ```markdown
 ## Memory Service
-Available via the `memory` MCP server (configured in `.mcp.json`). Use `memory_context` to load project knowledge, `memory_query` to search, `memory_store` to persist discoveries.
+Available via the `memory` MCP server (configured in `.mcp.json`). Use `memory_context` to load project knowledge (supports topic scoping), `memory_query` to search, `memory_store` to persist discoveries (auto-detects contradictions), `memory_graph` to explore entity relationships.
 ```
 
-**That's it.** Claude Code gets 7 tools automatically:
-- `memory_context` — load project knowledge at start of work
-- `memory_query` — search before working on unfamiliar code
-- `memory_store` — save discoveries (facts, observations, preferences)
-- `memory_ingest` — send raw text for smart extraction via Gemini
+**That's it.** Claude Code gets 8 tools automatically:
+- `memory_context` — load project knowledge at start of work (supports `topics` filter for scoped context)
+- `memory_query` — search before working on unfamiliar code (supports `include_graph` for entity relationships)
+- `memory_store` — save discoveries with automatic contradiction detection (facts, observations, preferences)
+- `memory_ingest` — send raw text for smart extraction via Gemini (extracts entity relationships too)
 - `memory_recent` — see what was recently stored
-- `memory_stats` — memory store statistics
+- `memory_stats` — memory store statistics (includes entity edge count)
 - `memory_forget` — delete a specific memory
+- `memory_graph` — browse entity relationship graph (full project or per-entity)
 
 **Why MCP over curl?**
 - No CLAUDE.md bloat (curl instructions eat ~500 tokens per conversation)
@@ -59,7 +60,11 @@ Memory service at `YOUR_URL` — project: `PROJECT_ID`
 
 **Load context at start:** `curl -s "YOUR_URL/api/context/PROJECT_ID"`
 
+**Scoped context:** `curl -s "YOUR_URL/api/context/PROJECT_ID?topics=auth,database"`
+
 **Search:** `curl -s "YOUR_URL/api/query?project=PROJECT_ID&q=KEYWORDS"`
+
+**Search with graph:** `curl -s "YOUR_URL/api/query?project=PROJECT_ID&q=KEYWORDS&include_graph=true"`
 
 **Store:**
 \`\`\`bash
@@ -74,6 +79,8 @@ curl -s -X POST "YOUR_URL/api/ingest" \
   -H "Content-Type: application/json" \
   -d '{"project":"PROJECT_ID","source":"claude-code","content":"Raw text describing what you learned"}'
 \`\`\`
+
+**Entity graph:** `curl -s "YOUR_URL/api/graph/PROJECT_ID"`
 ```
 
 ### When to Store

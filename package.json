@@ -1,7 +1,7 @@
 {
   "name": "agent-memory-service",
-  "version": "1.0.0",
-  "description": "Always-on AI memory service — persistent structured memory for AI agents and coding assistants with LLM extraction and background consolidation",
+  "version": "2.0.0",
+  "description": "Always-on AI memory service — persistent structured memory with entity graphs, temporal invalidation, contradiction detection, and progressive summarization",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * MCP Server for Agent Memory Service.
+ * MCP Server for Agent Memory Service (v2.0).
  *
  * Exposes memory operations as MCP tools so Claude Code, GSD subagents,
  * and Ralph Loops can use memory without curl commands or CLAUDE.md instructions.
+ *
+ * v2.0 features: scoped context (topics filter), entity graph, contradiction
+ * detection on store, include_graph on query.
  *
  * Usage in .mcp.json:
  *   {
@@ -69,30 +72,33 @@ function request(method, path, body) {
 const TOOLS = [
   {
     name: 'memory_context',
-    description: 'Get compressed project context (high-importance memories + summaries). Call this at the start of work to load what the project already knows. Returns the most important facts, decisions, and patterns.',
+    description: 'Get compressed project context (high-importance memories + summaries + entity graph). Call at start of work to load what the project already knows. Supports topic scoping to get only relevant context (e.g., topics: ["auth", "database"]).',
     inputSchema: {
       type: 'object',
       properties: {
         project: { type: 'string', description: 'Project name (defaults to MEMORY_PROJECT env var)' },
+        topics: { type: 'array', items: { type: 'string' }, description: 'Optional topic filter — only return memories tagged with these topics. Reduces context size for focused work.' },
       },
     },
   },
   {
     name: 'memory_query',
-    description: 'Search memories by keyword. Use this before working on unfamiliar code or debugging to check if the issue has been seen before.',
+    description: 'Search memories by keyword. Use before working on unfamiliar code or debugging to check if the issue has been seen before. Set include_graph=true to also get entity relationships.',
     inputSchema: {
       type: 'object',
       properties: {
         q: { type: 'string', description: 'Search keywords' },
         project: { type: 'string', description: 'Project name (defaults to MEMORY_PROJECT env var)' },
         limit: { type: 'number', description: 'Max results (default 5)' },
+        topics: { type: 'array', items: { type: 'string' }, description: 'Filter by topic tags' },
+        include_graph: { type: 'boolean', description: 'Include entity relationship edges for matched entities' },
       },
       required: ['q'],
     },
   },
   {
     name: 'memory_store',
-    description: 'Store a structured memory. Use after discovering non-obvious patterns, making architectural decisions, fixing tricky bugs, or getting user corrections. Keep content to 1-2 concise sentences.',
+    description: 'Store a structured memory with automatic contradiction detection. If the new memory contradicts an existing one, the old memory is automatically superseded. If it duplicates an existing memory, storage is skipped (NOOP). Keep content to 1-2 concise sentences.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -102,13 +108,14 @@ const TOOLS = [
         project: { type: 'string', description: 'Project name (defaults to MEMORY_PROJECT env var)' },
         entities: { type: 'array', items: { type: 'string' }, description: 'People, services, tools mentioned' },
         topics: { type: 'array', items: { type: 'string' }, description: 'Category tags (e.g., deployment, auth, database)' },
+        edges: { type: 'array', items: { type: 'object', properties: { subject: { type: 'string' }, predicate: { type: 'string' }, object: { type: 'string' } } }, description: 'Entity relationships (e.g., {subject: "Supabase", predicate: "uses", object: "ES256"})' },
       },
       required: ['content', 'memory_type', 'importance'],
     },
   },
   {
     name: 'memory_ingest',
-    description: 'Send raw text for smart extraction. The service uses Gemini Flash to extract structured memories automatically. Good for ingesting conversation summaries or debug session notes.',
+    description: 'Send raw text for smart extraction. The service uses Gemini Flash to extract structured memories and entity relationships automatically. Good for ingesting conversation summaries or debug session notes.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,7 +139,7 @@ const TOOLS = [
   },
   {
     name: 'memory_stats',
-    description: 'Get memory store statistics for a project.',
+    description: 'Get memory store statistics for a project, including entity edge count and consolidation status.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -151,6 +158,18 @@ const TOOLS = [
       required: ['id'],
     },
   },
+  {
+    name: 'memory_graph',
+    description: 'Get entity relationship graph for the project or a specific entity. Returns subject-predicate-object triples showing how entities relate (e.g., "Supabase uses ES256", "chat-relay depends-on Supabase SDK").',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project: { type: 'string', description: 'Project name (defaults to MEMORY_PROJECT env var)' },
+        entity: { type: 'string', description: 'Optional — get edges for a specific entity. If omitted, returns the full project graph.' },
+        limit: { type: 'number', description: 'Max edges to return (default 50)' },
+      },
+    },
+  },
 ];
 
 // ─── Tool execution ─────────────────────────────────────────────────────────
@@ -161,12 +180,18 @@ async function executeTool(name, args) {
   switch (name) {
     case 'memory_context': {
       if (!project) return { error: 'No project specified. Set MEMORY_PROJECT env var or pass project parameter.' };
-      return await request('GET', `/api/context/${encodeURIComponent(project)}`);
+      let path = `/api/context/${encodeURIComponent(project)}`;
+      if (args.topics && args.topics.length) {
+        path += `?topics=${args.topics.map(encodeURIComponent).join(',')}`;
+      }
+      return await request('GET', path);
     }
 
     case 'memory_query': {
       const params = new URLSearchParams({ q: args.q, limit: String(args.limit || 5) });
       if (project) params.set('project', project);
+      if (args.topics && args.topics.length) params.set('topics', args.topics.join(','));
+      if (args.include_graph) params.set('include_graph', 'true');
       return await request('GET', `/api/query?${params}`);
     }
 
@@ -179,6 +204,7 @@ async function executeTool(name, args) {
         importance: args.importance,
         entities: args.entities || [],
         topics: args.topics || [],
+        edges: args.edges || [],
         source: 'claude-code-mcp',
       });
     }
@@ -205,6 +231,15 @@ async function executeTool(name, args) {
 
     case 'memory_forget': {
       return await request('DELETE', `/api/forget/${args.id}`);
+    }
+
+    case 'memory_graph': {
+      if (!project) return { error: 'No project specified. Set MEMORY_PROJECT env var or pass project parameter.' };
+      if (args.entity) {
+        return await request('GET', `/api/graph/${encodeURIComponent(project)}/${encodeURIComponent(args.entity)}`);
+      }
+      const limit = args.limit || 50;
+      return await request('GET', `/api/graph/${encodeURIComponent(project)}?limit=${limit}`);
     }
 
     default:
@@ -252,7 +287,7 @@ async function handleMessage(line) {
         capabilities: { tools: {} },
         serverInfo: {
           name: 'agent-memory-service',
-          version: '1.0.0',
+          version: '2.0.0',
         },
       },
     });

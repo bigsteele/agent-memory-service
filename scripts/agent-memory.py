@@ -4,14 +4,21 @@
 Single-file CLI using only stdlib (urllib, json, argparse). No pip installs.
 Calls the Memory Service REST API instead of local SQLite.
 
+v2.0 features: scoped context (--topics), entity graph (--action graph),
+contradiction detection (automatic on store), include_graph on query.
+
 Usage:
     python3 memory.py --action store --content "..." --type fact --importance 0.8
     python3 memory.py --action query --query "client preferences"
+    python3 memory.py --action query --query "auth" --topics auth,supabase --include-graph
     python3 memory.py --action recall --id 42
     python3 memory.py --action recent
     python3 memory.py --action stats
     python3 memory.py --action forget --id 42
     python3 memory.py --action context
+    python3 memory.py --action context --topics auth,deployment
+    python3 memory.py --action graph
+    python3 memory.py --action graph --entity Supabase
     python3 memory.py --action export
 """
 
@@ -95,14 +102,14 @@ def api_delete(path):
 # ─── Actions ─────────────────────────────────────────────────────────────────
 
 def action_store(args):
-    """Store a new memory."""
+    """Store a new memory (with automatic contradiction detection)."""
     if not args.content:
         return error("--content is required")
 
     entities = args.entities.split(",") if args.entities else []
     topics = args.topics.split(",") if args.topics else []
 
-    result = api_post("/api/store", {
+    data = {
         "project": MEMORY_PROJECT,
         "agent": MEMORY_AGENT,
         "content": args.content,
@@ -112,7 +119,19 @@ def action_store(args):
         "entities": entities,
         "topics": topics,
         "importance": args.importance if args.importance is not None else 0.5,
-    })
+    }
+
+    # Parse edges if provided: "subject:predicate:object,subject:predicate:object"
+    if args.edges:
+        edges = []
+        for edge_str in args.edges.split(","):
+            parts = edge_str.strip().split(":")
+            if len(parts) == 3:
+                edges.append({"subject": parts[0], "predicate": parts[1], "object": parts[2]})
+        if edges:
+            data["edges"] = edges
+
+    result = api_post("/api/store", data)
     output(result)
 
 
@@ -132,6 +151,10 @@ def action_query(args):
         params["importance_above"] = args.importance_above
     if args.agent_filter:
         params["agent"] = args.agent_filter
+    if args.topics:
+        params["topics"] = args.topics
+    if args.include_graph:
+        params["include_graph"] = "true"
 
     result = api_get("/api/query", params)
     output(result)
@@ -161,8 +184,23 @@ def action_stats(args):
 
 
 def action_context(args):
-    """Get full project context (high-importance memories + summaries)."""
-    result = api_get(f"/api/context/{MEMORY_PROJECT}")
+    """Get full project context (high-importance memories + summaries + entity graph)."""
+    params = {}
+    if args.topics:
+        params["topics"] = args.topics
+    result = api_get(f"/api/context/{MEMORY_PROJECT}", params)
+    output(result)
+
+
+def action_graph(args):
+    """Get entity relationship graph."""
+    if args.entity:
+        result = api_get(f"/api/graph/{MEMORY_PROJECT}/{urllib.parse.quote(args.entity)}")
+    else:
+        params = {}
+        if args.limit:
+            params["limit"] = args.limit
+        result = api_get(f"/api/graph/{MEMORY_PROJECT}", params)
     output(result)
 
 
@@ -218,10 +256,10 @@ def error(msg):
 # ─── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Agent memory client — centralized memory service")
+    parser = argparse.ArgumentParser(description="Agent memory client — centralized memory service (v2.0)")
     parser.add_argument("--action", required=True,
                         choices=["store", "query", "recall", "recent", "stats",
-                                 "context", "forget", "export", "consolidate", "health"],
+                                 "context", "graph", "forget", "export", "consolidate", "health"],
                         help="Action to perform")
 
     # Store args
@@ -230,13 +268,18 @@ def main():
     parser.add_argument("--source", help="Source identifier")
     parser.add_argument("--summary", help="One-line summary")
     parser.add_argument("--entities", help="Comma-separated entity names")
-    parser.add_argument("--topics", help="Comma-separated topic tags")
+    parser.add_argument("--topics", help="Comma-separated topic tags (used for store, query, and context filtering)")
     parser.add_argument("--importance", type=float, help="Importance 0.0-1.0")
+    parser.add_argument("--edges", help="Entity edges as subject:predicate:object,... (e.g., 'Supabase:uses:ES256')")
 
     # Query args
     parser.add_argument("--query", help="Search query keywords")
     parser.add_argument("--importance-above", type=float, dest="importance_above", help="Min importance filter")
     parser.add_argument("--agent-filter", dest="agent_filter", help="Filter by agent name")
+    parser.add_argument("--include-graph", dest="include_graph", action="store_true", help="Include entity graph in query results")
+
+    # Graph args
+    parser.add_argument("--entity", help="Entity name for graph lookup")
 
     # Common args
     parser.add_argument("--id", type=int, help="Memory ID")
@@ -252,6 +295,7 @@ def main():
         "recent": action_recent,
         "stats": action_stats,
         "context": action_context,
+        "graph": action_graph,
         "forget": action_forget,
         "export": action_export,
         "consolidate": action_consolidate,

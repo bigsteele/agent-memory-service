@@ -1,7 +1,15 @@
 /**
- * Background consolidation loop.
+ * Background consolidation loop with progressive summarization.
+ *
  * Runs on a timer, finds unconsolidated memories, clusters them,
- * uses Gemini Flash to summarize clusters, and stores consolidated memories.
+ * uses Gemini Flash to summarize clusters, stores consolidated memories,
+ * and extracts entity relationship edges.
+ *
+ * Progressive summarization levels:
+ *   Level 0: Raw memories (individual facts, observations, etc.)
+ *   Level 1: Daily/cluster summaries (2-8 raw memories → 1 summary)
+ *   Level 2: Weekly theme summaries (3-6 L1 summaries → 1 theme)
+ *   Level 3: Architectural principles (3+ L2 summaries → 1 principle)
  */
 
 const memoryDb = require('./db');
@@ -13,27 +21,65 @@ const CONSOLIDATION_THRESHOLD = parseInt(process.env.CONSOLIDATION_THRESHOLD) ||
 const MAX_CLUSTER_SIZE = parseInt(process.env.MAX_CLUSTER_SIZE) || 8; // Prevent mega-clusters
 const IMPORTANCE_PROTECT = parseFloat(process.env.IMPORTANCE_PROTECT) || 0.85; // Never consolidate above this
 
+// Progressive summarization thresholds
+const L1_THRESHOLD = 20;  // Min L0 memories to trigger L1 consolidation
+const L2_THRESHOLD = 6;   // Min L1 summaries to trigger L2 consolidation
+const L3_THRESHOLD = 4;   // Min L2 summaries to trigger L3 consolidation
+
 let running = false;
 
 /**
  * Run consolidation for a single project.
+ * Handles Level 0→1 (raw→cluster), Level 1→2 (cluster→theme), Level 2→3 (theme→principle).
  */
 async function consolidateProject(project) {
-  const allUnconsolidated = memoryDb.getUnconsolidated(project, CONSOLIDATION_BATCH_SIZE);
+  const results = {
+    project,
+    levels: {},
+  };
 
-  if (allUnconsolidated.length < CONSOLIDATION_THRESHOLD) {
-    return { project, status: 'skip', reason: `Only ${allUnconsolidated.length} unconsolidated (threshold: ${CONSOLIDATION_THRESHOLD})` };
+  // Level 0 → Level 1: Cluster raw memories
+  const l0Result = await consolidateLevel(project, 0, L1_THRESHOLD, 1);
+  results.levels.l0_to_l1 = l0Result;
+
+  // Level 1 → Level 2: Consolidate cluster summaries into themes
+  const l1Result = await consolidateLevel(project, 1, L2_THRESHOLD, 2);
+  results.levels.l1_to_l2 = l1Result;
+
+  // Level 2 → Level 3: Consolidate themes into architectural principles
+  const l2Result = await consolidateLevel(project, 2, L3_THRESHOLD, 3);
+  results.levels.l2_to_l3 = l2Result;
+
+  const totalProcessed = (l0Result.processed || 0) + (l1Result.processed || 0) + (l2Result.processed || 0);
+  const totalCreated = (l0Result.created || 0) + (l1Result.created || 0) + (l2Result.created || 0);
+
+  results.status = totalProcessed > 0 ? 'done' : 'skip';
+  results.processed = totalProcessed;
+  results.created = totalCreated;
+
+  return results;
+}
+
+/**
+ * Consolidate memories at a specific level into the next level.
+ */
+async function consolidateLevel(project, fromLevel, threshold, toLevel) {
+  const allUnconsolidated = memoryDb.getUnconsolidated(project, CONSOLIDATION_BATCH_SIZE)
+    .filter(m => (m.summary_level || 0) === fromLevel);
+
+  if (allUnconsolidated.length < threshold) {
+    return { status: 'skip', reason: `Only ${allUnconsolidated.length} L${fromLevel} (threshold: ${threshold})` };
   }
 
   // Protect high-importance memories from consolidation
   const unconsolidated = allUnconsolidated.filter(m => (m.importance || 0) < IMPORTANCE_PROTECT);
-  const protected_count = allUnconsolidated.length - unconsolidated.length;
+  const protectedCount = allUnconsolidated.length - unconsolidated.length;
 
   if (unconsolidated.length < 2) {
-    return { project, status: 'skip', reason: `${protected_count} memories protected (importance >= ${IMPORTANCE_PROTECT}), only ${unconsolidated.length} eligible` };
+    return { status: 'skip', reason: `${protectedCount} protected, only ${unconsolidated.length} eligible` };
   }
 
-  console.log(`[consolidator] ${project}: Processing ${unconsolidated.length} memories (${protected_count} protected by importance)`);
+  console.log(`[consolidator] ${project}: L${fromLevel}→L${toLevel}: Processing ${unconsolidated.length} memories (${protectedCount} protected)`);
 
   // Cluster by entity/topic overlap
   const clusters = clusterMemories(unconsolidated);
@@ -44,21 +90,25 @@ async function consolidateProject(project) {
     if (cluster.length < 2) continue;
 
     try {
-      // Use Gemini to summarize the cluster
       const consolidated = await extractor.consolidate(cluster);
 
-      // Store the consolidated memory
       const result = memoryDb.store({
         project,
         agent: 'consolidator',
         content: consolidated.content,
         memory_type: 'summary',
-        source: 'consolidation',
+        source: `consolidation-L${toLevel}`,
         summary: consolidated.summary,
         entities: consolidated.entities,
         topics: consolidated.topics,
         importance: consolidated.importance,
+        summary_level: toLevel,
       });
+
+      // Store entity edges from consolidation
+      if (consolidated.edges && consolidated.edges.length) {
+        memoryDb.storeEdges(project, result.id, consolidated.edges);
+      }
 
       // Mark originals as consolidated
       const ids = cluster.map(m => m.id);
@@ -66,7 +116,7 @@ async function consolidateProject(project) {
       totalProcessed += ids.length;
       totalCreated += 1;
 
-      console.log(`[consolidator] ${project}: Consolidated ${ids.length} memories → #${result.id}`);
+      console.log(`[consolidator] ${project}: L${fromLevel}→L${toLevel}: ${ids.length} memories → #${result.id}`);
     } catch (err) {
       console.error(`[consolidator] ${project}: Cluster consolidation failed:`, err.message);
     }
@@ -77,14 +127,14 @@ async function consolidateProject(project) {
     memoryDb.logConsolidation({
       project,
       source_ids: unconsolidated.map(m => m.id),
-      summary: `Consolidated ${totalProcessed} memories into ${totalCreated} summaries`,
-      insight: `${clusters.length} clusters found`,
+      summary: `L${fromLevel}→L${toLevel}: Consolidated ${totalProcessed} into ${totalCreated}`,
+      insight: `${clusters.length} clusters at level ${fromLevel}`,
       memories_processed: totalProcessed,
       memories_created: totalCreated,
     });
   }
 
-  return { project, status: 'done', processed: totalProcessed, created: totalCreated, clusters: clusters.length };
+  return { status: 'done', processed: totalProcessed, created: totalCreated, clusters: clusters.length };
 }
 
 /**
@@ -164,6 +214,7 @@ async function consolidateAll() {
  */
 function start() {
   console.log(`[consolidator] Starting background loop (interval: ${CONSOLIDATION_INTERVAL / 1000}s, threshold: ${CONSOLIDATION_THRESHOLD})`);
+  console.log(`[consolidator] Progressive summarization: L0→L1 (${L1_THRESHOLD}), L1→L2 (${L2_THRESHOLD}), L2→L3 (${L3_THRESHOLD})`);
 
   // First consolidation after 1 hour (give time for memories to accumulate, don't consolidate on fresh deploy)
   setTimeout(async () => {

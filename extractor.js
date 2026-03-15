@@ -1,5 +1,5 @@
 /**
- * Gemini Flash extractor — takes raw content and extracts structured memory metadata.
+ * Gemini Flash extractor — structured extraction, entity graph, and contradiction detection.
  * Uses Google Gemini 2.5 Flash for cheap, fast structured extraction.
  * Falls back to simple heuristics if no API key is configured.
  */
@@ -21,7 +21,10 @@ Return ONLY valid JSON with these fields:
       "summary": "One-line summary",
       "entities": ["entity1", "entity2"],
       "topics": ["topic1", "topic2"],
-      "importance": 0.5
+      "importance": 0.5,
+      "edges": [
+        {"subject": "Entity A", "predicate": "uses", "object": "Entity B", "confidence": 0.9}
+      ]
     }
   ]
 }
@@ -32,8 +35,25 @@ Rules:
 - importance: 0.1 (trivial) to 1.0 (critical). Most things are 0.4-0.6. Only truly critical items (security, money, deadlines) get 0.8+.
 - entities: People, companies, projects, services, tools mentioned.
 - topics: 2-4 category tags for grouping related memories.
+- edges: Entity relationships found in the content. Common predicates: uses, depends-on, connects-to, deployed-on, configured-with, replaces, manages, contains, runs-on, calls, owns, blocks, fixes. Only include edges with clear relationships stated in the content.
 - Be concise. Strip fluff. Keep only what's worth remembering.
 - If the content is trivial (greetings, acknowledgments), return {"memories": []}.`;
+
+const CONTRADICTION_PROMPT = `You are a memory contradiction detector. Given a NEW memory and a list of EXISTING memories, classify the relationship.
+
+Return ONLY valid JSON:
+{
+  "action": "ADD|UPDATE|NOOP",
+  "supersede_ids": [],
+  "reason": "Brief explanation"
+}
+
+Rules:
+- ADD: The new memory contains genuinely new information not covered by existing memories. This is the most common action.
+- UPDATE: The new memory updates or corrects information in one or more existing memories. List the IDs to supersede in supersede_ids. Use this when the new memory contradicts or refines an existing one.
+- NOOP: The new memory is a near-duplicate of an existing memory. Nothing to store. Only use NOOP when the existing memory already captures the same information with equivalent or better detail.
+
+Bias toward ADD — only use UPDATE when there is a clear contradiction or refinement, and only use NOOP when it is truly a duplicate.`;
 
 /**
  * Extract structured memories from raw content using Gemini Flash.
@@ -70,6 +90,49 @@ async function extract(content, source) {
   } catch (err) {
     console.error('[extractor] Gemini extraction failed:', err.message);
     return extractFallback(content, source);
+  }
+}
+
+/**
+ * Detect contradictions between new content and existing memories.
+ * Returns { action: 'ADD'|'UPDATE'|'NOOP', supersede_ids: number[], reason: string }
+ */
+async function detectContradiction(newContent, existingMemories) {
+  if (!GEMINI_API_KEY || !existingMemories.length) {
+    return { action: 'ADD', supersede_ids: [], reason: 'No Gemini or no existing memories to compare' };
+  }
+
+  const existingText = existingMemories.map(m =>
+    `[ID:${m.id}] (${m.memory_type}, importance: ${m.importance}) ${m.content}`
+  ).join('\n');
+
+  try {
+    const body = JSON.stringify({
+      contents: [{
+        parts: [{
+          text: `${CONTRADICTION_PROMPT}\n\nNEW MEMORY:\n${newContent}\n\nEXISTING MEMORIES:\n${existingText}`
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 500,
+        responseMimeType: 'application/json',
+      }
+    });
+
+    const response = await httpPost(GEMINI_URL, body);
+    const text = response.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) return { action: 'ADD', supersede_ids: [], reason: 'Empty response' };
+    const parsed = JSON.parse(text);
+    return {
+      action: parsed.action || 'ADD',
+      supersede_ids: parsed.supersede_ids || [],
+      reason: parsed.reason || '',
+    };
+  } catch (err) {
+    console.error('[extractor] Contradiction detection failed:', err.message);
+    return { action: 'ADD', supersede_ids: [], reason: `Error: ${err.message}` };
   }
 }
 
@@ -118,6 +181,7 @@ function extractFallback(content, source) {
     entities: [...new Set(entities)].slice(0, 10),
     topics: topics.slice(0, 4),
     importance,
+    edges: [],
   }];
 }
 
@@ -142,7 +206,10 @@ Return ONLY valid JSON:
   "entities": ["merged entity list"],
   "topics": ["merged topic list"],
   "importance": 0.7,
-  "insight": "Any cross-cutting pattern or insight discovered across these memories (1 sentence, or null)"
+  "insight": "Any cross-cutting pattern or insight discovered across these memories (1 sentence, or null)",
+  "edges": [
+    {"subject": "Entity A", "predicate": "uses", "object": "Entity B", "confidence": 0.9}
+  ]
 }
 
 Rules:
@@ -150,6 +217,7 @@ Rules:
 - Importance should be the max of the input memories (consolidated knowledge is more valuable).
 - Keep entities and topics merged and deduplicated.
 - The insight field should capture any pattern that isn't obvious from individual memories.
+- Extract entity relationship edges from the consolidated knowledge.
 
 Memories to consolidate:
 ${memoriesText}`;
@@ -195,6 +263,7 @@ function consolidateFallback(memories) {
     topics: [...allTopics],
     importance: maxImportance,
     insight: null,
+    edges: [],
   };
 }
 
@@ -224,4 +293,4 @@ function httpPost(url, body) {
   });
 }
 
-module.exports = { extract, consolidate };
+module.exports = { extract, consolidate, detectContradiction };
