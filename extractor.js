@@ -126,8 +126,7 @@ async function detectContradiction(newContent, existingMemories) {
       }],
       generationConfig: {
         temperature: 0.1,
-        maxOutputTokens: 500,
-        responseMimeType: 'application/json',
+        maxOutputTokens: 1000,
       }
     });
 
@@ -145,7 +144,14 @@ async function detectContradiction(newContent, existingMemories) {
       return { action: 'ADD', supersede_ids: [], reason: 'Empty Gemini response' };
     }
 
-    const parsed = JSON.parse(text);
+    // Extract JSON from response (Gemini may wrap in markdown code blocks)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      console.warn('[extractor] No JSON found in contradiction response:', text.slice(0, 200));
+      return { action: 'ADD', supersede_ids: [], reason: 'No JSON in response' };
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
     console.log(`[extractor] Contradiction result: ${parsed.action} (${parsed.reason || 'no reason'})`);
     return {
       action: parsed.action || 'ADD',
