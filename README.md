@@ -306,7 +306,7 @@ python3 memory.py --action query --query "auth" --include-graph
 | `PORT` | `3005` | HTTP server port |
 | `MEMORY_DB_PATH` | `/data/memory.db` | SQLite file path |
 | `GEMINI_API_KEY` | — | Google Gemini API key (enables smart extraction + contradiction detection) |
-| `GEMINI_MODEL` | `gemini-2.5-flash-preview-05-20` | Which Gemini model to use |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Which Gemini model to use |
 | `MEMORY_API_KEY` | — | API key for auth (optional, set `x-api-key` header) |
 | `CONSOLIDATION_INTERVAL_MS` | `21600000` | Background consolidation interval (default: 6h) |
 | `CONSOLIDATION_BATCH_SIZE` | `50` | Max memories per consolidation run |
